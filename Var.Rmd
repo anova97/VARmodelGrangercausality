@@ -1,0 +1,241 @@
+---
+title: "Model VAR, przyczynowość Grangera"
+author: "Jakub Augustynek"
+date: "4 01 2020"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Celem tego projektu jest zbudowanie modelu wektorowej autoregresji - **VAR**. 
+
+Do modelu wybrany zostanie odpowiedni rząd opóźnień, zbudowany model zostanie zweryfikowany, czyli  **sprawdzone zostanie występowanie autokorelacji reszt**, następnie **zbadana zostanie przyczyczynowość w sensie Grangera**. 
+
+
+Model zbudowany będzie dla stóp zwrotu podanych indeksów giełdowych:
+<ul> 
+<li> **DAX**  - niemiecki indeks akcji </li>
+<li> **FTSE** -  brytyjski indeks akcji </li>
+<li> **SHC** - chiński indeks giełdowy </li>
+<li> **SPX** - amerykański indeks giełdowy </li>
+<li> **WIG20** - polski indeks giełdowy </li>
+</ul>
+
+<br>
+
+
+
+## Przygotowanie danych
+
+Dane pobrane zostały ze strony (https://stooq.pl). Pobrano dzienne dane historyczne indeksów od stycznia 2010 roku do grudnia 2019. 
+
+```{r dane, message=FALSE, warning=FALSE}
+library(readr)
+dax <- read_csv("data/^dax_d.csv")
+dax<-dax[,c(1,5)]
+ftse <- read_csv("data/^ftm_d.csv")
+ftse<-ftse[,c(1,5)]
+shc <- read_csv("data/^shc_d.csv")
+shc<-shc[,c(1,5)]
+spx <- read_csv("data/^spx_d.csv")
+spx<-spx[,c(1,5)]
+wig20 <- read_csv("data/wig20_d.csv")
+wig20<-wig20[,c(1,5)]
+```
+
+Dane uporządkowano połączono w jeden data frame według daty. 
+```{r,  message=FALSE, warning=FALSE}
+#utworzenie jednego data frame, NA w miejscu braku obserwacji
+library(dplyr)
+daxFTSE<-full_join(dax, ftse, by="Data")
+dfs<-full_join(daxFTSE, shc, by="Data")
+dfss<-full_join(dfs, spx, by="Data")
+dfssw<-full_join(dfss, wig20, by="Data")
+
+data<-dfssw
+colnames(data)<-c("Data", "DAX", "FTSE", "SHC", "SPX", "WIG20")
+sum(is.na(data))
+data<-arrange(data, Data)
+```
+
+Ponieważ występowały braki danych, zastosowano **interpolację liniową**. W interpolacji używana jest ostatnia ważna wartość przed brakiem danych oraz pierwsza ważna za brakiem. Jeśli braki danych występują w pierwszej lub ostatniej obserwacji w serii, nie są one zastępowane. Użyta do tego została funkcja *na.approx*. 
+```{r,  message=FALSE, warning=FALSE}
+library(zoo)
+#interpolacja
+DAX_no_NA<-na.approx(data$DAX, na.rm = FALSE)
+FTSE_no_NA<-na.approx(data$FTSE, na.rm = FALSE)
+SHC_no_NA<-na.approx(data$SHC, na.rm = FALSE)
+SPX_no_NA<-na.approx(data$SPX, na.rm = FALSE)
+WIG20_no_NA<-na.approx(data$WIG20, na.rm = FALSE)
+
+daneN<-data.frame("Data"=data$Data, "DAX"=DAX_no_NA, "FTSE"=FTSE_no_NA,
+                  "SHC"=SHC_no_NA, "SPX"=SPX_no_NA, "WIG20"=WIG20_no_NA)
+#brak 4 ostatnich wartości w FTSE, usuwam te obserwacje
+daneN<-daneN[1:2585,]
+head(daneN)
+```
+
+## Obliczanie logarytmicznych stóp zwrotu
+
+
+Dla danych zamknięcia obliczono logarytmiczne stopy zwrotu.
+```{r,  message=FALSE, warning=FALSE}
+stopy<-data.frame(0)
+
+
+for(i in 1:(nrow(daneN)-1))
+{
+  stopy[i,1]=log(daneN[i+1,2]/daneN[i,2])
+  stopy[i,2]=log(daneN[i+1,3]/daneN[i,3])
+  stopy[i,3]=log(daneN[i+1,4]/daneN[i,4])
+  stopy[i,4]=log(daneN[i+1,5]/daneN[i,5])
+  stopy[i,5]=log(daneN[i+1,6]/daneN[i,6])
+}
+colnames(stopy)<-c("DAX", "FTSE", "SHC", "SPX", "WIG20")
+head(stopy)
+```
+
+## Badanie stacjonarności stóp zwrotu
+
+
+Zmienne w modelu VAR muszą być stacjonarne, szeregi muszą więc spełniać warunek stałej średniej, stałej wariancji, a funkcja autokowariancji powinna zależeć wyłącznie od opóźnienia. W celu sprawdzenia czy stopy zwrotu indeksów giełdowych są stacjonarne przeprowadzony zostanie test adf, jego hipotezy są następujące:     
+
+**H0: Niestacjonarność stóp zwrotu ** <br>
+
+
+**H1: Stacjonarność stóp zwrotu **
+```{r,  message=FALSE, warning=FALSE}
+library(tseries)
+adf.test(stopy[,1],alternative = c("stationary"))
+adf.test(stopy[,2],alternative = c("stationary"))
+adf.test(stopy[,3],alternative = c("stationary"))
+adf.test(stopy[,4],alternative = c("stationary"))
+adf.test(stopy[,5],alternative = c("stationary"))
+```
+
+</br>
+</br>
+</br>
+
+
+Testy przeprowadzono dla stóp zwrotu każdego z badanych indeksów giełdowych. 
+
+
+Dla każdego z testów wartość p jest mniejsza od poziomu istotoności, odrzucam hipotezę zerową mówiącą, o niestacjonarności, **stopy zwrotu są stacjonarne**. Będą mogły zostać użyte do budowy modelu VAR. <br>
+
+## Wybór rzędu opóźnień
+
+Wybór rzędu opóźnień zmiennych w modelu VAR jest bardzo ważnym elementem modelowania. Zbyt duża liczba opóźnień powoduje nadmierną komplikacje modelu, z kolei zbyt mała może spowodować wystąpienie autokorelacji składników losowych. 
+
+
+Przy pomocy funkcji VARselect wybrany zostanie odpowiedni rząd opóźnień. Oblicza ona cztery kryteria informacyjne: Akaike’a **AIC**, Hannana i Quinna **HQ**, Schwartza **SC** oraz Final Prediction Error **FPE**. 
+
+```{r,  message=FALSE, warning=FALSE}
+library(vars)
+
+VARselect(stopy)
+```
+Wyniki dwóch kryteriów informacyjnych (HQ, SC) wskazują na wybranie modelu z opóźnieniem rzędu 1 **VAR(1)**, jednak dwa inne kryteria (AIC, FPE) wskazują za odpowiednie opóźnienia rzędu 2 **VAR(2)**. Różnice te, mogą być spowodowane wrażliwością kryteriów informacyjnych, ze względu na występujące różnice czasowe (np. pomiędzy Chinami, a USA).
+
+Dlatego rozsądniejsze wydaje się utworzenie modelu VAR z opóźnieniami rzędu 2 **VAR(2)**. 
+
+### Tworzę model z opóźnieniami rzędu 2 VAR(2).
+
+
+
+```{r,  message=FALSE, warning=FALSE}
+var2 <- VAR(stopy, p=2)
+var2
+```
+
+## Weryfikacja modelu
+
+W celu weryfikacji wyestymowanego modelu VAR należy przede wszystkim sprawdzić, czy nie zachodzi autokorelacja składników losowych nie tylko pierwszego stopnia, ale także wyższych stopni aż do stopnia równego liczbie opóźnień. W celu weryfikacji autokorelacji składników losowych użyty zostanie **test Ljunga-Boxa** o następujących hipotezach:
+
+
+**H0: Autokorelacja reszt nie wystepuje ** 
+
+
+**H1: Autokorelcja reszt jest istotna statystycznie **
+```{r,  message=FALSE, warning=FALSE}
+Box.test(var2$varresult$DAX$residuals, lag =2, type=c("Ljung-Box"))
+Box.test(var2$varresult$FTSE$residuals, lag =2, type=c("Ljung-Box"))
+Box.test(var2$varresult$SHC$residuals, lag =2, type=c("Ljung-Box"))
+Box.test(var2$varresult$SPX$residuals, lag =2, type=c("Ljung-Box"))
+Box.test(var2$varresult$WIG20$residuals, lag =2, type=c("Ljung-Box"))
+```
+
+W przypadku każdego z testów wartość p jest większa niż poziom istotności, brak podstaw do odrzucenia hipotezy zerowej. **Autokorelacja reszt nie występuje**. 
+
+
+### Weryfikacja istotności zmiennych.
+
+W przypadku pierwszego równania, wyjaśniana jest zmienna **DAX**, istotnymi zmiennymi są zmienna **DAX o opóźnieniu 1, SHC o opóźnieniu 1, SPX o opóźnieniu 1**, a także **DAX o opóźnieniu 2 i FTSE o opóźnieniu 2**.
+
+W drugim równaniu, wyjaśniana jest zmienna **FTSE**, istotnymi zmiennymi są zmienna **FTSE o opóźnieniu 1, SPX o opóźnieniu 1**,  a także **DAX o opóźnieniu 2**.
+
+W następnym równaniu wyjaśniana jest zmienna **SHC**, istotną zmienną jest tylko zmienna **SPX o opóźnieniu 1**.
+
+W następnym równaniu wyjaśniana jest zmienna **SPX, istotnymi zmiennymi jest zmienna FTSE o opóźnieniu 2 oraz stała**.
+
+
+W ostatnim równaniu, wyjaśniana jest zmienna **WIG20, istotnymi zmiennymi są zmienna DAX o opóźnieniu 1, SPX o opóźnieniu 1,  a także SPX o opóźnieniu 2 i WIG20 o opóźnieniu 2**.
+
+```{r,  message=FALSE, warning=FALSE}
+summary(var2)
+```
+
+#### Badanie przyczynowości w sensie Grangera
+
+Koncepcja przyczynowości Grangera polega na tym, że zmienna X jest przyczyną zmiennej Y, jeśli bieżące wartości Y można prognozować z większą dokładnością, wykorzystując przeszłe wartości X niż bez nich (przy niezmienionej pozostałej informacji), czyli gdy współczynniki przy opóźnionych zmiennych X są statystycznie istotne. Jeśli nawet wszystkie parametry dla jakiejś zmiennej z rozłożonymi opóźnieniami są nieistotne, to nie oznacza, że nie będa istotne w sposób łączny.
+
+
+
+W celu badania przyczynowości zastosowana zostanie liniowa wersja testu Grangera. 
+
+
+W pierwszym teście sprawdzone zostanie czy DAX jest przyczyną dla FTSE SHC SPX WIG20, czyli czy DAX może być pominięty w równaniach opisujących FTSE SHC SPX WIG20. 
+
+Hipoteza zerowa tego testu zakłada brak zależności przyczynowej w sensie Grangera zmiennej DAX do zmiennych FTSE SHC SPX WIG20. 
+
+Test ten przeprowadzony zostanie dla każdej występującej w modelu zmiennej.
+
+
+**H0: Brak przyczynowosci w sensie Grangera  ** 
+
+
+**H1: Istnieje przyczynowość w sensie Grangera **
+```{r,  message=FALSE, warning=FALSE}
+causality(var2, cause = "DAX")$Granger
+causality(var2, cause = "FTSE")$Granger
+causality(var2, cause = "SHC")$Granger
+causality(var2, cause = "SPX")$Granger
+causality(var2, cause = "WIG20")$Granger
+```
+
+<br>
+
+## Podsumowanie wyników
+
+W testach tych otrzymano następujące wyniki: <br>
+
+
+-  W teście przyczynowości Grangera stóp zwrotu indeksu **DAX** wartość p jest mniejsza od poziomu istotności, odrzucam hipotezę zerową, **zmienna DAX jest przyczyną w sensie Grangera** dla FTSE SHC SPX WIG20. 
+
+-  Dla indeksu **FTSE** wartość p testu jest mniejsza od poziomu istotności, odrzucam hipotezę zerową, **zmienna FTSE jest przyczyną w sensie Grangera** dla DAX SHC SPX WIG20.  
+
+-  Dla indeksu **SHC** wartość p testu przyczynowości Grangera jest większa od poziomu istotności, brak podstaw do odrzucenia hipotezy zerowej. **Brak zależności przyczynowej w sensie Grangera zmiennej FTSE** dla DAX FTSE SPX WIG20.
+
+-  Dla indeksu **SPX** wartość p testu jest mniejsza od poziomu istotności, odrzucam hipotezę zerową, **zmienna SPX jest przyczyną w sensie Grangera** dla DAX FTSE SHC WIG20.  
+
+-  Dla indeksu **WIG20** wartość p testu przyczynowości Grangera jest większa od poziomu istotności, brak podstaw do odrzucenia hipotezy zerowej. **Brak zależności przyczynowej w sensie Grangera zmiennej WIG20** dla DAX FTSE SHC SPX.
+
+
+Zmienna SHC nie jest przyczyną w sensie Grangera, a w przeprowadzonych testach istotności, jej 1. opóźnienie było istotne tylko w jednym równaniu.
+
+Zmienna WIG20 nie jest przyczyną w sensie Grangera, a w przeprowadzonych testach istotności, jej 2. opóźnienie było istotne tylko w jednym równaniu, opisującym bieżące wartości WIG20.
+
+Pozostałe zmienne, które są przyczynami w sensie Grangera, były istotne w równaniach modelu. 

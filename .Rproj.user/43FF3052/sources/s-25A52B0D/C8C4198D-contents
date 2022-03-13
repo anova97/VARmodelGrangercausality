@@ -1,0 +1,108 @@
+#Projekt 2 - budowa modelu wektorowa - autoregresyjnego VAR
+#w modelach wektorowo-autoregresyjnych ka?da zmienna jest zmienn?
+#obja?nian? (w modelach VAR jest tyle r?wna?, ile zmiennych u?yto do badania),
+#a op??nienia wszystkich zmiennych s? zmiennymi obja?niaj?cymi, dlatego
+#nie ma podzia?u na zmienne endogeniczne i egzogeniczne. 
+
+install.packages("zoo")
+install.packages("vars")
+library(zoo)
+library(vars)
+library(tseries)
+
+setwd("D:/Adrian/Studia/7 semestr/Analiza Wielowymiarowa/Projekty zaliczeniowe/Projekt_2")
+
+#O sk?adnikach losowych zak?adamy, ?e s? skorelowane mi?dzy sob? w tym samym okresie a nieskorelowane pomi?dzy okresami.
+#Wyst?pienie autokorelacji powoduje utrat? przez model po??danych w?asno?ci, podobnie jak brak niekt?rych op??nie? w modelu.
+
+
+#wczytanie danych
+x1 <- read.csv("dax_d.csv",sep=";", dec = ".", header = T)
+x2 <- read.csv("dji_d.csv",sep=";", dec = ".", header = T)
+x3 <- read.csv("hsi_d.csv",sep=";", dec = ".", header = T)
+x4 <- read.csv("nkx_d.csv",sep=";", dec = ".", header = T)
+stopy <- matrix(0,1770,4)
+m1 = merge(x1, x2, by = "Data", incomparables = NA, all.x  = TRUE)
+m2 = merge(m1, x3, by = "Data", incomparables = NA, all.x  = TRUE)
+dane = merge(m2, x4, by = "Data", incomparables = NA, all.x  = TRUE)
+
+colnames(dane) <- c("Data","x1","x2","x3","x4")
+colnames(stopy) <- c("x1","x2","x3","x4")
+for (i in 3:5)
+{
+  dane[,i] <- na.approx(dane[,i])
+}
+
+#obliczenie logarytnicznych stop zwrotu
+
+for (i in 1:1770)
+{
+  stopy[i,1] <- log(dane[i+1,2]/dane[i,2])
+  stopy[i,2] <- log(dane[i+1,3]/dane[i,3])
+  stopy[i,3] <- log(dane[i+1,4]/dane[i,4])
+  stopy[i,4] <- log(dane[i+1,5]/dane[i,5])
+}
+
+#Zbadania czy zmienne s? stacjonarne
+adf.test(stopy[,1],alternative = c("stationary"))
+adf.test(stopy[,2],alternative = c("stationary"))
+adf.test(stopy[,3],alternative = c("stationary"))
+adf.test(stopy[,4],alternative = c("stationary"))
+
+#do wybrania rz?du op??nie? zmiennych
+#Funkcja VARSelect oblicza kryteria informacyjne dla zmiennych, Do modelu wybieramy ten rz?d op??nie?, dla kt?rego warto?? wybranego kryterium jest najmniejsza, poniewa? oznacza to, ?e utrata informacji jest najmniejsza.  
+
+VARselect(stopy)
+
+model_var1 <- VAR(stopy, p=1) #p - oznacza jakie opoznienie, 1 bo dwa testy wskazaly ze jest autokorelacja I rzedu, i sprawdzamy czy po opoznieniu danych o 1 autokorelacji juz nie ma, jak jest to zrobic model Var z opoznieniem wiekszym i znow sprawdzic
+
+#Nast?pnym krokiem jest zweryfikowanie reszt poszczeg?lnych r?wna? modelu
+#VAR(1). Reszty nie mog? wykazywa? autokorelacji oraz musz? mie? rozk?ad normalny.
+
+var_1reszty1 <-model_var1$varresult$x1$residuals
+Box.test(var_1reszty1, lag =1, type=c("Ljung-Box")) 
+
+var_1reszty2 <-model_var1$varresult$x2$residuals
+Box.test(var_1reszty2, lag =1, type=c("Ljung-Box"))
+
+var_1reszty3 <-model_var1$varresult$x3$residuals
+Box.test(var_1reszty3, lag =1, type=c("Ljung-Box"))
+
+var_1reszty4 <-model_var1$varresult$x4$residuals
+Box.test(var_1reszty4, lag =1, type=c("Ljung-Box"))
+
+#H0: Autokorelacja reszt nie wystepuje
+#H1: Autokorelcja wyst?puje
+
+#W wybranych danych wystepuje autokorelacja reszt rownania 4. Dlatego tez, zbudowano model VAR z op??nienim drugiego rz?du
+model_var2 <- VAR(stopy, p=2)
+
+var_2reszty1 <-model_var2$varresult$x1$residuals
+Box.test(var_2reszty1, lag =1, type=c("Ljung-Box")) 
+
+var_2reszty2 <-model_var2$varresult$x2$residuals
+Box.test(var_2reszty2, lag =1, type=c("Ljung-Box"))
+
+var_2reszty3 <-model_var2$varresult$x3$residuals
+Box.test(var_2reszty3, lag =1, type=c("Ljung-Box"))
+
+var_2reszty4 <-model_var2$varresult$x4$residuals
+Box.test(var_2reszty4, lag =1, type=c("Ljung-Box"))
+
+#po opoznieniu danych o 2 stopnie test Ljung-Box pokazuje ze w ?adnym z r?wna? autokorelacja reszt nie wyst?puje
+
+#Przyczynowo?? w sensie Grangera
+#Zmienna x jest przyczyn? w sensie Grangera zmiennej y je?eli
+#bie??ce warto?ci zmiennej y mo?na dok?adniej prognozowa?
+#uwzgl?dniaj?c przesz?e warto?ci zmiennej x ni? bez ich uwzgl?dniania
+
+#sprawdzanie przyczynowosci w sensie Grangera
+causality(model_var2, cause="x1")$Granger
+causality(model_var2, cause="x2")$Granger
+causality(model_var2, cause="x3")$Granger
+causality(model_var2, cause="x4")$Granger
+
+#H0: brak przyczynowosci w sensie Grangera - beta = 0
+#H1 ~ H0
+
+

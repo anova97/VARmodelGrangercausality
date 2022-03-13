@@ -1,0 +1,4 @@
+"0","library(readr)"
+"0","dax <- read_csv(""~/Downloads/^dax_d.csv"")"
+"2","BŁĄD: '~/Downloads/^dax_d.csv' does not exist.
+"
